@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MIL記号 論理回路シミュレーター</title>
+    <style>
+        body {
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            background-color: #eef2f3;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { color: #2c3e50; margin-bottom: 10px; }
+        .toolbar {
+            margin-bottom: 15px;
+            background: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+        .btn {
+            padding: 8px 16px;
+            margin: 0 5px;
+            font-weight: bold;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .btn:hover { background-color: #2980b9; }
+        .btn-clear { background-color: #e74c3c; }
+        .btn-clear:hover { background-color: #c0392b; }
+        #canvas-container {
+            position: relative;
+            background: #ffffff;
+            border: 2px solid #bdc3c7;
+            border-radius: 8px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        canvas { display: block; }
+        .instructions {
+            margin-top: 15px;
+            color: #7f8c8d;
+            font-size: 14px;
+            text-align: center;
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>論理回路シミュレーター</h1>
+    
+    <div class="toolbar">
+        <strong>ゲート追加:</strong>
+        <button class="btn" onclick="addGate('INPUT')">INPUT</button>
+        <button class="btn" onclick="addGate('AND')">AND</button>
+        <button class="btn" onclick="addGate('OR')">OR</button>
+        <button class="btn" onclick="addGate('NOT')">NOT</button>
+        <button class="btn" onclick="addGate('OUTPUT')">OUTPUT</button>
+        <button class="btn btn-clear" onclick="clearCircuit()">全消去</button>
+    </div>
+
+    <div id="canvas-container">
+        <canvas id="circuitCanvas" width="800" height="500"></canvas>
+    </div>
+
+    <div class="instructions">
+        <strong>【操作方法】</strong><br>
+        ・<strong>移動:</strong> 記号の真ん中をドラッグして動かせます。<br>
+        ・<strong>配線:</strong> 出力端子（右側の○）から入力端子（左側の○）へドラッグすると線を繋げます。<br>
+        ・<strong>操作:</strong> INPUTゲートをダブルクリックすると `0` と `1` が切り替わります。
+    </div>
+
+    <script>
+        const canvas = document.getElementById('circuitCanvas');
+        const ctx = canvas.getContext('2d');
+
+        let gates = [];
+        let connections = [];
+
+        let draggedGate = null;
+        let dragOffsetX = 0;
+        let dragOffsetY = 0;
+        let drawingWire = null;
+
+        // ゲートクラス
+        class Gate {
+            constructor(type, x, y) {
+                this.id = Date.now() + Math.random().toString(36).substr(2, 5);
+                this.type = type;
+                this.x = x;
+                this.y = y;
+                this.width = 80;
+                this.height = 50;
+                this.inputs = (type === 'AND' || type === 'OR') ? [0, 0] : (type === 'NOT' || type === 'OUTPUT') ? [0] : []; 
+                this.output = 0;
+            }
+
+            // 端子の座標を取得
+            getPinPositions() {
+                const pins = { inputs: [], output: null };
+                
+                // 入力端子 (左端)
+                if (this.inputs.length === 1) {
+                    pins.inputs.push({ x: this.x, y: this.y + this.height / 2 });
+                } else if (this.inputs.length === 2) {
+                    // ORゲートの場合は少し内側に入力ピンを配置（形状に合わせるため）
+                    const offset = this.type === 'OR' ? 8 : 0;
+                    pins.inputs.push({ x: this.x + offset, y: this.y + this.height / 4 });
+                    pins.inputs.push({ x: this.x + offset, y: this.y + (this.height / 4) * 3 });
+                }
+
+                // 出力端子 (右端)
+                if (this.type !== 'OUTPUT') {
+                    pins.output = { x: this.x + this.width, y: this.y + this.height / 2 };
+                }
+                return pins;
+            }
+
+            draw() {
+                // 信号の状態によって色を変更 (ON: 緑, OFF: 暗い青灰色)
+                let isActive = false;
+                if (this.type === 'INPUT' && this.output === 1) isActive = true;
+                if (this.type === 'OUTPUT' && this.inputs[0] === 1) isActive = true;
+                if ((this.type === 'AND' || this.type === 'OR' || this.type === 'NOT') && this.output === 1) isActive = true;
+
+                ctx.strokeStyle = '#2c3e50';
+                ctx.fillStyle = isActive ? '#2ecc71' : '#ecf0f1';
+                ctx.lineWidth = 3;
+
+                const x = this.x;
+                const y = this.y;
+                const w = this.width;
+                const h = this.height;
+
+                ctx.beginPath();
+                
+                if (this.type === 'INPUT') {
+                    // 入力：シンプルな六角形（または長方形）
+                    ctx.roundRect(x, y + 10, w - 20, h - 20, 4);
+                    ctx.fill(); ctx.stroke();
+                    
+                    // テキスト
+                    ctx.fillStyle = isActive ? '#fff' : '#2c3e50';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.fillText(`IN: ${this.output}`, x + (w-20)/2, y + h/2);
+                    
+                } else if (this.type === 'OUTPUT') {
+                    // 出力：円形型
+                    ctx.arc(x + 20, y + h/2, 20, 0, Math.PI * 2);
+                    ctx.fill(); ctx.stroke();
+                    
+                    ctx.fillStyle = isActive ? '#fff' : '#2c3e50';
+                    ctx.font = 'bold 14px Arial';
+                    ctx.fillText(`${this.inputs[0] || 0}`, x + 20, y + h/2);
+
+                } else if (this.type === 'AND') {
+                    // MIL記号 AND: 左が直線、右が半円
+                    ctx.moveTo(x, y);
+                    ctx.lineTo(x + w/2, y);
+                    ctx.arc(x + w/2, y + h/2, h/2, -Math.PI/2, Math.PI/2, false);
+                    ctx.lineTo(x, y + h);
+                    ctx.closePath();
+                    ctx.fill(); ctx.stroke();
+                    
+                    // 中央に識別用の薄い文字
+                    ctx.fillStyle = 'rgba(44, 62, 80, 0.2)';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.fillText('AND', x + w/3, y + h/2);
+
+                } else if (this.type === 'OR') {
+                    // MIL記号 OR: 左が凹んだ曲線、右が尖った三日月型
+                    ctx.moveTo(x, y);
+                    // 上の曲線
+                    ctx.quadraticCurveTo(x + w*0.4, y, x + w, y + h/2);
+                    // 下の曲線
+                    ctx.quadraticCurveTo(x + w*0.4, y + h, x, y + h);
+                    // 左の凹み線
+                    ctx.quadraticCurveTo(x + w*0.25, y + h/2, x, y);
+                    ctx.closePath();
+                    ctx.fill(); ctx.stroke();
+
+                    ctx.fillStyle = 'rgba(44, 62, 80, 0.2)';
+                    ctx.font = 'bold 12px Arial';
+                    ctx.fillText('OR', x + w/2, y + h/2);
+
+                } else if (this.type === 'NOT') {
+                    // MIL記号 NOT: 三角形 ＋ 先端の小さな丸
+                    ctx.moveTo(x, y + 5);
+                    ctx.lineTo(x + w - 15, y + h/2);
+                    ctx.lineTo(x, y + h - 5);
+                    ctx.closePath();
+                    ctx.fill(); ctx.stroke();
+                    
+                    // 先端の○ (反転の丸)
+                    ctx.beginPath();
+                    ctx.arc(x + w - 7, y + h/2, 6, 0, Math.PI * 2);
+                    ctx.fill(); ctx.stroke();
+                }
+
+                // 端子(赤色の接続ポイント○)の描画
+                const pins = this.getPinPositions();
+                ctx.fillStyle = '#e74c3c';
+                ctx.lineWidth = 1;
+                
+                pins.inputs.forEach(pin => {
+                    ctx.beginPath();
+                    ctx.arc(pin.x, pin.y, 5, 0, Math.PI * 2);
+                    ctx.fill(); ctx.stroke();
+                });
+
+                if (pins.output) {
+                    ctx.beginPath();
+                    ctx.arc(pins.output.x, pins.output.y, 5, 0, Math.PI * 2);
+                    ctx.fill(); ctx.stroke();
+                }
+            }
+        }
+
+        // ゲートの追加
+        function addGate(type) {
+            const x = 80 + Math.random() * 100;
+            const y = 80 + Math.random() * 200;
+            gates.push(new Gate(type, x, y));
+            render();
+        }
+
+        // 全消去
+        function clearCircuit() {
+            gates = [];
+            connections = [];
+            render();
+        }
+
+        // 論理回路の計算
+        function evaluateCircuit() {
+            for (let i = 0; i < 5; i++) { 
+                connections.forEach(conn => {
+                    const fromGate = gates.find(g => g.id === conn.fromGateId);
+                    const toGate = gates.find(g => g.id === conn.toGateId);
+                    if (fromGate && toGate) {
+                        toGate.inputs[conn.toInputIndex] = fromGate.output;
+                    }
+                });
+
+                gates.forEach(gate => {
+                    if (gate.type === 'AND') {
+                        gate.output = (gate.inputs[0] && gate.inputs[1]) ? 1 : 0;
+                    } else if (gate.type === 'OR') {
+                        gate.output = (gate.inputs[0] || gate.inputs[1]) ? 1 : 0;
+                    } else if (gate.type === 'NOT') {
+                        gate.output = gate.inputs[0] === 0 ? 1 : 0;
+                    } else if (gate.type === 'OUTPUT') {
+                        gate.output = gate.inputs[0] || 0;
+                    }
+                });
+            }
+        }
+
+        // 描画メイン処理
+        function render() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+
+            // 背景のグリッド線
+            ctx.strokeStyle = '#f5f5f5';
+            ctx.lineWidth = 1;
+            for(let x=0; x<canvas.width; x+=20) {
+                ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
+            }
+            for(let y=0; y<canvas.height; y+=20) {
+                ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+            }
+
+            evaluateCircuit();
+
+            // 配線の描画
+            connections.forEach(conn => {
+                const fromGate = gates.find(g => g.id === conn.fromGateId);
+                const toGate = gates.find(g => g.id === conn.toGateId);
+                if (fromGate && toGate) {
+                    const start = fromGate.getPinPositions().output;
+                    const end = toGate.getPinPositions().inputs[conn.toInputIndex];
+                    
+                    // 信号が流れている線は青、流れていない線はグレー
+                    ctx.strokeStyle = fromGate.output === 1 ? '#3498db' : '#bdc3c7';
+                    ctx.lineWidth = 3;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(start.x, start.y);
+                    ctx.bezierCurveTo(start.x + 40, start.y, end.x - 40, end.y, end.x, end.y);
+                    ctx.stroke();
+                }
+            });
+
+            // ドラッグ中の配線を描画
+            if (drawingWire) {
+                ctx.strokeStyle = '#e67e22';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([4, 4]);
+                ctx.beginPath();
+                ctx.moveTo(drawingWire.startX, drawingWire.startY);
+                ctx.lineTo(drawingWire.currentX, drawingWire.currentY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+
+            // ゲートの描画
+            gates.forEach(gate => gate.draw());
+        }
+
+        // --- マウスイベント ---
+
+        canvas.addEventListener('mousedown', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            // 1. 出力ピンがクリックされたか判定
+            for (let gate of gates) {
+                const pins = gate.getPinPositions();
+                if (pins.output) {
+                    const dist = Math.hypot(pins.output.x - mouseX, pins.output.y - mouseY);
+                    if (dist < 8) {
+                        drawingWire = {
+                            fromGate: gate,
+                            startX: pins.output.x,
+                            startY: pins.output.y,
+                            currentX: mouseX,
+                            currentY: mouseY
+                        };
+                        return;
+                    }
+                }
+            }
+
+            // 2. ゲート本体がクリックされたか判定
+            for (let i = gates.length - 1; i >= 0; i--) {
+                const gate = gates[i];
+                if (mouseX >= gate.x && mouseX <= gate.x + gate.width &&
+                    mouseY >= gate.y && mouseY <= gate.y + gate.height) {
+                    draggedGate = gate;
+                    dragOffsetX = mouseX - gate.x;
+                    dragOffsetY = mouseY - gate.y;
+                    
+                    gates.push(gates.splice(i, 1)[0]);
+                    return;
+                }
+            }
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (draggedGate) {
+                draggedGate.x = mouseX - dragOffsetX;
+                draggedGate.y = mouseY - dragOffsetY;
+                render();
+            } else if (drawingWire) {
+                drawingWire.currentX = mouseX;
+                drawingWire.currentY = mouseY;
+                render();
+            }
+        });
+
+        canvas.addEventListener('mouseup', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            if (drawingWire) {
+                for (let gate of gates) {
+                    if (gate.id === drawingWire.fromGate.id) continue;
+                    
+                    const pins = gate.getPinPositions();
+                    for (let i = 0; i < pins.inputs.length; i++) {
+                        const pin = pins.inputs[i];
+                        const dist = Math.hypot(pin.x - mouseX, pin.y - mouseY);
+                        if (dist < 10) {
+                            connections = connections.filter(c => !(c.toGateId === gate.id && c.toInputIndex === i));
+                            connections.push({
+                                fromGateId: drawingWire.fromGate.id,
+                                toGateId: gate.id,
+                                toInputIndex: i
+                            });
+                            break;
+                        }
+                    }
+                }
+                drawingWire = null;
+                render();
+            }
+            draggedGate = null;
+        });
+
+        canvas.addEventListener('dblclick', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            gates.forEach(gate => {
+                if (gate.type === 'INPUT' &&
+                    mouseX >= gate.x && mouseX <= gate.x + gate.width &&
+                    mouseY >= gate.y && mouseY <= gate.y + gate.height) {
+                    gate.output = gate.output === 0 ? 1 : 0;
+                    render();
+                }
+            });
+        });
+
+        // 初期配置
+        addGate('INPUT');
+        addGate('INPUT');
+        addGate('AND');
+        addGate('OUTPUT');
+    </script>
+</body>
+</html>
